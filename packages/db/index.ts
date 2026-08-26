@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from './generated/prisma/client';
+import {Prisma} from './generated/prisma/client'
 
 
 const connectionString = process.env.DATABASE_URL
@@ -14,4 +15,5 @@ const prisma = globalForPrisma.prisma ?? new PrismaClient({
 
 if (process.env.BUN_ENV !== "production") globalForPrisma.prisma = prisma;
 
+export type { Prisma }
 export default prisma
