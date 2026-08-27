@@ -11,5 +11,6 @@ const requireEnv = (key:string):string => {
 export const envConfig = {
     PORT : requireEnv('PORT'),
     BUN_ENV : requireEnv('BUN_ENV'),
-    DATABASE_URL : requireEnv('DATABASE_URL')
+    DATABASE_URL : requireEnv('DATABASE_URL'),
+    JWT_SECRET: requireEnv('JWT_SECRET')
 }

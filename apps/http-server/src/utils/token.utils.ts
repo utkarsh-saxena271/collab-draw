@@ -1,7 +1,8 @@
 import jwt from "jsonwebtoken";
 import { AccessTokenPayload } from "@repo/common";
+import { envConfig } from "../config/env.config";
 
-const JWT_SECRET = process.env.JWT_SECRET as string;
+const JWT_SECRET = envConfig.JWT_SECRET as string;
 
 if (!JWT_SECRET) {
   throw new Error("JWT_SECRET is not set in environment variables");
