@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// ────────────────────────────────
-// Shared primitives
-// ────────────────────────────────
-
 export const ShapeTypeEnum = z.enum(["RECTANGLE", "ELLIPSE", "LINE"]);
 export type ShapeTypeEnum = z.infer<typeof ShapeTypeEnum>;
 
@@ -13,9 +9,6 @@ export const PointSchema = z.object({
 });
 export type Point = z.infer<typeof PointSchema>;
 
-// ────────────────────────────────
-// Client -> Server messages
-// ────────────────────────────────
 
 export const AuthMessageSchema = z.object({
   type: z.literal("AUTH"),
@@ -36,7 +29,7 @@ export const ShapeCreateMessageSchema = z.object({
   type: z.literal("SHAPE_CREATE"),
   roomId: z.string(),
   shapeType: ShapeTypeEnum,
-  data: z.record(z.any()), // shape-specific geometry (x, y, w, h, etc.)
+  data: z.record(z.string(), z.any()), // shape-specific geometry (x, y, w, h, etc.)
   color: z.string(),
   strokeWidth: z.number(),
 });
@@ -74,9 +67,6 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
-// ────────────────────────────────
-// Server -> Client messages
-// ────────────────────────────────
 
 export const AuthOkMessageSchema = z.object({
   type: z.literal("AUTH_OK"),
@@ -106,7 +96,7 @@ export const ShapeCreatedMessageSchema = z.object({
   roomId: z.string(),
   shapeId: z.string(),
   shapeType: ShapeTypeEnum,
-  data: z.record(z.any()),
+  data: z.record(z.string(), z.any()),
   color: z.string(),
   strokeWidth: z.number(),
   createdById: z.string(),
