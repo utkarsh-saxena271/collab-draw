@@ -20,7 +20,7 @@ async function generateUniqueSlug(name: string): Promise<string> {
     if (!existing) return slug;
 
     attempt++;
-    const suffix = crypto.randomBytes(3).toString("hex");
+    const suffix = crypto.randomBytes(6).toString("hex");
     slug = `${base}-${suffix}`;
 
     if (attempt > 5) {
@@ -69,6 +69,12 @@ export async function getRoomBySlug(
   const { slug } = req.params;
   const userId = req.user!.userId;
 
+  if(slug && typeof slug !== `string`){
+    return res.status(400).json({
+      message: "Invalid params"
+    })
+  }
+
   const room = await prisma.room.findUnique({
     where: { slug },
     include: {
@@ -104,6 +110,10 @@ export async function inviteToRoom(
     return res.status(400).json({ error: "email is required" });
   }
 
+  if(!roomId || typeof roomId != `string`){
+    return res.status(400).json({message : "Invalid params"})
+  }
+
   const room = await prisma.room.findUnique({ where: { id: roomId } });
   if (!room) {
     return res.status(404).json({ error: "Room not found" });
@@ -116,6 +126,16 @@ export async function inviteToRoom(
   const rawToken = crypto.randomBytes(32).toString("hex");
   const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7);
+
+  if(!roomId){
+    return res.status(400).json({message: "Params not found"})
+  }
+
+  if(roomId && typeof roomId !== `string`){
+    return res.status(400).json({
+      message: "Invalid params"
+    })
+  }
 
   await prisma.invitation.create({
     data: {

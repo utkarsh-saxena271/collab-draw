@@ -9,7 +9,7 @@ const SALT_ROUNDS = 10;
 export async function signup(req: Request, res: Response) {
   const parsed = RegisterSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    return res.status(400).json({ error: "Invalid input", details: parsed.error.issues });
   }
 
   const { email, password, name } = parsed.data;
@@ -34,7 +34,7 @@ export async function signup(req: Request, res: Response) {
 export async function login(req: Request, res: Response) {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    return res.status(400).json({ error: "Invalid input", details: parsed.error.issues });
   }
 
   const { email, password } = parsed.data;
