@@ -16,7 +16,7 @@ export function startStroke(
   createdById: string,
   color: string,
   width: number,
-  startPoint: Point
+  startPoint: Point,
 ): void {
   activeStrokes.set(strokeId, {
     roomId,
@@ -37,4 +37,20 @@ export function endStroke(strokeId: string): ActiveStroke | undefined {
   const stroke = activeStrokes.get(strokeId);
   activeStrokes.delete(strokeId);
   return stroke;
+}
+
+/** Drop in-flight strokes that were erased before they were persisted. */
+export function removeActiveStrokes(strokeIds: string[]): void {
+  for (const strokeId of strokeIds) {
+    activeStrokes.delete(strokeId);
+  }
+}
+
+/** Drop every in-flight stroke in a room after the canvas was cleared. */
+export function clearActiveStrokes(roomId: string): void {
+  for (const [strokeId, stroke] of activeStrokes) {
+    if (stroke.roomId === roomId) {
+      activeStrokes.delete(strokeId);
+    }
+  }
 }

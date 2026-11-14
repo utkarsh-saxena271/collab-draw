@@ -28,6 +28,7 @@ enum ShapeType {
   RECTANGLE
   ELLIPSE
   LINE
+  TEXT
 }
 
 // user
@@ -127,6 +128,8 @@ model Stroke {
   points      Json
   color       String
   width       Int
+  offsetX     Float    @default(0)
+  offsetY     Float    @default(0)
   createdById String
   createdAt   DateTime @default(now())
 

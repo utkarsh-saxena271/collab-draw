@@ -12,5 +12,6 @@ export const envConfig = {
     PORT : requireEnv('PORT'),
     BUN_ENV : requireEnv('BUN_ENV'),
     DATABASE_URL : requireEnv('DATABASE_URL'),
-    JWT_SECRET: requireEnv('JWT_SECRET')
+    JWT_SECRET: requireEnv('JWT_SECRET'),
+    CORS_ORIGIN: process.env.CORS_ORIGIN
 }

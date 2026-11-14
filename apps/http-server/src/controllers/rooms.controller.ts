@@ -29,10 +29,7 @@ async function generateUniqueSlug(name: string): Promise<string> {
   }
 }
 
-export async function createRoom(
-  req: Request,
-  res: Response
-){
+export async function createRoom(req: Request, res: Response) {
   const { name } = req.body;
   const ownerId = req.user!.userId;
 
@@ -49,7 +46,7 @@ export async function createRoom(
   return res.status(201).json({ room });
 }
 
-export async function listRooms(req: Request, res: Response){
+export async function listRooms(req: Request, res: Response) {
   const userId = req.user!.userId;
 
   const rooms = await prisma.room.findMany({
@@ -62,23 +59,51 @@ export async function listRooms(req: Request, res: Response){
   return res.status(200).json({ rooms });
 }
 
-export async function getRoomBySlug(
-  req: Request,
-  res: Response
-){
+export async function deleteRoom(req: Request, res: Response) {
+  const { roomId } = req.params;
+  const userId = req.user!.userId;
+
+  if (!roomId || typeof roomId !== "string") {
+    return res.status(400).json({ error: "Invalid params" });
+  }
+
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    select: { ownerId: true },
+  });
+
+  if (!room) {
+    return res.status(404).json({ error: "Room not found" });
+  }
+
+  if (room.ownerId !== userId) {
+    return res
+      .status(403)
+      .json({ error: "Only the room owner can delete this room" });
+  }
+
+  // Members, invitations, shapes and strokes cascade with the room.
+  await prisma.room.delete({ where: { id: roomId } });
+
+  return res.status(200).json({ deletedRoomId: roomId });
+}
+
+export async function getRoomBySlug(req: Request, res: Response) {
   const { slug } = req.params;
   const userId = req.user!.userId;
 
-  if(slug && typeof slug !== `string`){
+  if (slug && typeof slug !== `string`) {
     return res.status(400).json({
-      message: "Invalid params"
-    })
+      message: "Invalid params",
+    });
   }
 
   const room = await prisma.room.findUnique({
     where: { slug },
     include: {
-      members: { include: { user: { select: { id: true, name: true, email: true } } } },
+      members: {
+        include: { user: { select: { id: true, name: true, email: true } } },
+      },
       shapes: true,
       strokes: true,
     },
@@ -89,19 +114,20 @@ export async function getRoomBySlug(
   }
 
   const isOwner = room.ownerId === userId;
-  const isMember = room.members.some((m: { userId: string }) => m.userId === userId);
+  const isMember = room.members.some(
+    (m: { userId: string }) => m.userId === userId,
+  );
 
   if (!isOwner && !isMember) {
-    return res.status(403).json({ error: "You do not have access to this room" });
+    return res
+      .status(403)
+      .json({ error: "You do not have access to this room" });
   }
 
   return res.status(200).json({ room });
 }
 
-export async function inviteToRoom(
-  req: Request,
-  res: Response
-){
+export async function inviteToRoom(req: Request, res: Response) {
   const { roomId } = req.params;
   const { email } = req.body;
   const invitedById = req.user!.userId;
@@ -110,8 +136,8 @@ export async function inviteToRoom(
     return res.status(400).json({ error: "email is required" });
   }
 
-  if(!roomId || typeof roomId != `string`){
-    return res.status(400).json({message : "Invalid params"})
+  if (!roomId || typeof roomId != `string`) {
+    return res.status(400).json({ message: "Invalid params" });
   }
 
   const room = await prisma.room.findUnique({ where: { id: roomId } });
@@ -120,21 +146,23 @@ export async function inviteToRoom(
   }
 
   if (room.ownerId !== invitedById) {
-    return res.status(403).json({ error: "Only the room owner can invite members" });
+    return res
+      .status(403)
+      .json({ error: "Only the room owner can invite members" });
   }
 
   const rawToken = crypto.randomBytes(32).toString("hex");
   const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7);
 
-  if(!roomId){
-    return res.status(400).json({message: "Params not found"})
+  if (!roomId) {
+    return res.status(400).json({ message: "Params not found" });
   }
 
-  if(roomId && typeof roomId !== `string`){
+  if (roomId && typeof roomId !== `string`) {
     return res.status(400).json({
-      message: "Invalid params"
-    })
+      message: "Invalid params",
+    });
   }
 
   await prisma.invitation.create({
@@ -150,10 +178,7 @@ export async function inviteToRoom(
   return res.status(201).json({ inviteToken: rawToken, expiresAt });
 }
 
-export async function acceptInvitation(
-  req: Request,
-  res: Response
-){
+export async function acceptInvitation(req: Request, res: Response) {
   const { token } = req.params;
   const userId = req.user!.userId;
 
@@ -163,14 +188,18 @@ export async function acceptInvitation(
 
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
-  const invitation = await prisma.invitation.findUnique({ where: { tokenHash } });
+  const invitation = await prisma.invitation.findUnique({
+    where: { tokenHash },
+  });
 
   if (!invitation) {
     return res.status(404).json({ error: "Invalid invitation" });
   }
 
   if (invitation.status !== "PENDING") {
-    return res.status(410).json({ error: "Invitation already used or expired" });
+    return res
+      .status(410)
+      .json({ error: "Invitation already used or expired" });
   }
 
   if (invitation.expiresAt < new Date()) {
