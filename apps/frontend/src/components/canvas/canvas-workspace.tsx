@@ -62,6 +62,9 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [fontSize, setFontSize] = useState(18);
   const [textEditor, setTextEditor] = useState<TextEditor | null>(null);
+  const [canvasActionError, setCanvasActionError] = useState<string | null>(
+    null,
+  );
   const [shareOpen, setShareOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"clear" | "delete" | null>(
@@ -95,6 +98,7 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
     applyStrokePoints,
     applyStrokeEnded,
     applyElementsDeleted,
+    applyElementsMoved,
     applyCanvasCleared,
     clearLocalScene,
     commitTextEdit,
@@ -112,6 +116,7 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
     send: socket.send,
     onTextEditorOpen: setTextEditor,
     onTextEditorClose: () => setTextEditor(null),
+    onActionError: setCanvasActionError,
   });
 
   useEffect(() => {
@@ -132,8 +137,14 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
         case "ELEMENTS_DELETED":
           applyElementsDeleted(message);
           break;
+        case "ELEMENTS_MOVED":
+          applyElementsMoved(message);
+          break;
         case "CANVAS_CLEARED":
           applyCanvasCleared(message);
+          break;
+        case "ERROR":
+          setCanvasActionError(message.message);
           break;
         default:
           break;
@@ -145,6 +156,7 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
     applyStrokePoints,
     applyStrokeEnded,
     applyElementsDeleted,
+    applyElementsMoved,
     applyCanvasCleared,
   ]);
 
@@ -408,10 +420,28 @@ export function CanvasWorkspace({ slug }: { slug: string }) {
 
         {!loading && !roomError && room ? (
           <>
+            {canvasActionError ? (
+              <div
+                role="alert"
+                className="absolute left-1/2 top-14 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-start gap-2 rounded-xl border border-red-200 bg-white/95 px-3.5 py-2.5 text-xs font-medium text-red-800 shadow-xl shadow-gray-900/10 backdrop-blur"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                <span className="leading-5">{canvasActionError}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss canvas error"
+                  onClick={() => setCanvasActionError(null)}
+                  className="ml-1 shrink-0 rounded px-1 text-red-600 hover:bg-red-50"
+                >
+                  ×
+                </button>
+              </div>
+            ) : null}
+
             <TextEditorOverlay
               editor={textEditor}
               onCommit={(shapeId, text, width, height) => {
-                commitTextEdit(shapeId, text, width, height);
+                return commitTextEdit(shapeId, text, width, height);
               }}
               onDismiss={() => setTextEditor(null)}
             />

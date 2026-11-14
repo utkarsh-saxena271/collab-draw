@@ -5,7 +5,12 @@ import type { TextEditor } from "@/hooks/use-canvas-engine";
 
 interface TextEditorOverlayProps {
   editor: TextEditor | null;
-  onCommit: (shapeId: string, text: string, width?: number, height?: number) => void;
+  onCommit: (
+    shapeId: string,
+    text: string,
+    width?: number,
+    height?: number,
+  ) => boolean;
   onDismiss: () => void;
 }
 
@@ -42,10 +47,12 @@ export function TextEditorOverlay({
     if (event.key === "Escape") {
       event.preventDefault();
       const el = textareaRef.current;
-      if (el) {
-        onCommit(editor.shapeId, el.value, el.scrollWidth, el.scrollHeight);
+      if (
+        el &&
+        onCommit(editor.shapeId, el.value, el.scrollWidth, el.scrollHeight)
+      ) {
+        onDismiss();
       }
-      onDismiss();
       return;
     }
 

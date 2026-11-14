@@ -310,12 +310,18 @@ export function shapeSignature(shape: CanvasShape): string {
       ? [shape.data.x1, shape.data.y1, shape.data.x2, shape.data.y2]
       : [shape.data.x, shape.data.y, shape.data.width, shape.data.height];
 
+  const textContent =
+    shape.type === "TEXT"
+      ? [shape.data.fontSize, shape.data.text]
+      : [];
+
   return [
     shape.type,
     shape.createdById,
     shape.color,
     shape.strokeWidth,
     ...geometry,
+    ...textContent,
   ].join("|");
 }
 

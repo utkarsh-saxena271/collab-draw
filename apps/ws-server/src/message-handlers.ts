@@ -95,26 +95,35 @@ export async function handleClientMessage(
         return;
       }
 
-      const shape = await prisma.shape.upsert({
+      const existing = await prisma.shape.findUnique({
         where: { id: message.shapeId },
-        update: {
-          roomId: message.roomId,
-          type: message.shapeType,
-          data: message.data as Prisma.InputJsonValue,
-          color: message.color,
-          strokeWidth: message.strokeWidth,
-          createdById: state.userId,
-        },
-        create: {
-          id: message.shapeId,
-          roomId: message.roomId,
-          type: message.shapeType,
-          data: message.data as Prisma.InputJsonValue,
-          color: message.color,
-          strokeWidth: message.strokeWidth,
-          createdById: state.userId,
-        },
+        select: { roomId: true },
       });
+
+      if (existing && existing.roomId !== message.roomId) {
+        send(ws, { type: "ERROR", message: "Shape not found in this room" });
+        return;
+      }
+
+      const data = {
+        type: message.shapeType,
+        data: message.data as Prisma.InputJsonValue,
+        color: message.color,
+        strokeWidth: message.strokeWidth,
+        createdById: state.userId,
+      };
+      const shape = existing
+        ? await prisma.shape.update({
+            where: { id: message.shapeId },
+            data,
+          })
+        : await prisma.shape.create({
+            data: {
+              id: message.shapeId,
+              roomId: message.roomId,
+              ...data,
+            },
+          });
 
       broadcastToRoom(message.roomId, {
         type: "SHAPE_CREATED",
@@ -279,7 +288,7 @@ export async function handleClientMessage(
       const { shapeIds, strokeIds, dx, dy } = message;
       if (shapeIds.length === 0 && strokeIds.length === 0) return;
 
-      const updates: Promise<unknown>[] = [];
+      const updates: Prisma.PrismaPromise<unknown>[] = [];
 
       // For shapes: update geometry in the JSON `data` field.
       // We fetch each shape individually so we can apply the delta.
@@ -332,7 +341,7 @@ export async function handleClientMessage(
         );
       }
 
-      await Promise.all(updates);
+      await prisma.$transaction(updates);
 
       broadcastToRoom(
         message.roomId,

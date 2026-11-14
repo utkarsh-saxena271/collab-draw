@@ -68,6 +68,8 @@ interface EraseSession {
   pointerId: number;
   strokeIds: Set<string>;
   shapeIds: Set<string>;
+  strokes: Map<string, Stroke>;
+  shapes: Map<string, CanvasShape>;
 }
 
 interface PanState {
@@ -108,6 +110,7 @@ interface UseCanvasEngineOptions {
   send: (message: ClientMessage) => boolean;
   onTextEditorOpen: (editor: TextEditor) => void;
   onTextEditorClose: () => void;
+  onActionError: (message: string) => void;
 }
 
 export interface CanvasEngine {
@@ -126,7 +129,12 @@ export interface CanvasEngine {
   applyElementsMoved: (event: ElementsMovedEvent) => void;
   applyCanvasCleared: (event: CanvasClearedEvent) => void;
   clearLocalScene: () => void;
-  commitTextEdit: (shapeId: string, text: string, width?: number, height?: number) => void;
+  commitTextEdit: (
+    shapeId: string,
+    text: string,
+    width?: number,
+    height?: number,
+  ) => boolean;
   zoomIn: () => void;
   zoomOut: () => void;
   resetView: () => void;
@@ -152,6 +160,7 @@ export function useCanvasEngine({
   send,
   onTextEditorOpen,
   onTextEditorClose,
+  onActionError,
 }: UseCanvasEngineOptions): CanvasEngine {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -195,6 +204,7 @@ export function useCanvasEngine({
   const userIdRef = useRef(userId);
   const onTextEditorOpenRef = useRef(onTextEditorOpen);
   const onTextEditorCloseRef = useRef(onTextEditorClose);
+  const onActionErrorRef = useRef(onActionError);
 
   useEffect(() => { toolRef.current = tool; }, [tool]);
   useEffect(() => { colorRef.current = color; }, [color]);
@@ -206,6 +216,7 @@ export function useCanvasEngine({
   useEffect(() => { userIdRef.current = userId; }, [userId]);
   useEffect(() => { onTextEditorOpenRef.current = onTextEditorOpen; }, [onTextEditorOpen]);
   useEffect(() => { onTextEditorCloseRef.current = onTextEditorClose; }, [onTextEditorClose]);
+  useEffect(() => { onActionErrorRef.current = onActionError; }, [onActionError]);
 
   const updateSelection = useCallback((shapeId: string | null, strokeId: string | null) => {
     selectedShapeIdRef.current = shapeId;
@@ -283,6 +294,7 @@ export function useCanvasEngine({
         if (!strokeHitByPoint(stroke, point, tolerance)) continue;
 
         session.strokeIds.add(strokeId);
+        session.strokes.set(strokeId, stroke);
         removeStroke(strokeId);
         erased = true;
       }
@@ -292,6 +304,7 @@ export function useCanvasEngine({
         if (!shapeHitByPoint(shape, point, tolerance)) continue;
 
         session.shapeIds.add(shapeId);
+        session.shapes.set(shapeId, shape);
         removeShape(shapeId);
         erased = true;
       }
@@ -481,25 +494,21 @@ export function useCanvasEngine({
   const commitTextEdit = useCallback(
     (shapeId: string, text: string, width?: number, height?: number) => {
       const existing = shapesRef.current.get(shapeId);
-      if (!existing || existing.type !== "TEXT") return;
+      if (!existing || existing.type !== "TEXT") return false;
 
       const data: TextData = {
         ...existing.data,
         text,
-        ...(width !== undefined ? { width } : {}),
-        ...(height !== undefined ? { height } : {}),
+        ...(width !== undefined
+          ? { width: width / cameraRef.current.scale }
+          : {}),
+        ...(height !== undefined
+          ? { height: height / cameraRef.current.scale }
+          : {}),
       };
 
       const updated: CanvasShape = { ...existing, data };
-      shapesRef.current.set(shapeId, updated);
-
-      // Send to server as a SHAPE_CREATE with the new data (upsert behaviour
-      // on the server uses the same shapeId → it's already persisted as a row,
-      // so we send MOVE_ELEMENTS with 0 delta purely to trigger a re-fetch, or
-      // better: re-use SHAPE_CREATE with the updated data payload).
-      // Because the server just overwrites `data` on the existing row via the
-      // id, this works correctly.
-      sendRef.current({
+      const sent = sendRef.current({
         type: "SHAPE_CREATE",
         roomId: roomIdRef.current,
         shapeId,
@@ -509,8 +518,19 @@ export function useCanvasEngine({
         strokeWidth: existing.strokeWidth,
       });
 
+      if (!sent) {
+        onActionErrorRef.current(
+          "Text was not saved because the live connection is unavailable. Reconnect and try again.",
+        );
+        return false;
+      }
+
+      shapesRef.current.set(shapeId, updated);
+      shapeSignaturesRef.current.delete(shapeSignature(existing));
+      shapeSignaturesRef.current.add(shapeSignature(updated));
       requestRender();
       onTextEditorCloseRef.current();
+      return true;
     },
     [requestRender],
   );
@@ -643,6 +663,8 @@ export function useCanvasEngine({
           pointerId: event.pointerId,
           strokeIds: new Set(),
           shapeIds: new Set(),
+          strokes: new Map(),
+          shapes: new Map(),
         };
 
         eraseSessionRef.current = session;
@@ -869,7 +891,7 @@ export function useCanvasEngine({
 
         // Only persist if actually moved
         if (Math.abs(totalDx) > 0.5 || Math.abs(totalDy) > 0.5) {
-          sendRef.current({
+          const sent = sendRef.current({
             type: "MOVE_ELEMENTS",
             roomId: roomIdRef.current,
             shapeIds: drag.shapeId ? [drag.shapeId] : [],
@@ -877,6 +899,31 @@ export function useCanvasEngine({
             dx: totalDx,
             dy: totalDy,
           });
+
+          if (!sent) {
+            if (drag.shapeId) {
+              const shape = shapesRef.current.get(drag.shapeId);
+              if (shape) {
+                shapesRef.current.set(
+                  drag.shapeId,
+                  applyShapeOffset(shape, -totalDx, -totalDy),
+                );
+              }
+            }
+            if (drag.strokeId) {
+              const stroke = strokesRef.current.get(drag.strokeId);
+              if (stroke) {
+                strokesRef.current.set(drag.strokeId, {
+                  ...stroke,
+                  offsetX: stroke.offsetX - totalDx,
+                  offsetY: stroke.offsetY - totalDy,
+                });
+              }
+            }
+            onActionErrorRef.current(
+              "The move was not saved because the live connection is unavailable. Reconnect and try again.",
+            );
+          }
         }
 
         requestRender();
@@ -889,12 +936,26 @@ export function useCanvasEngine({
         eraseSessionRef.current = null;
 
         if (eraseSession.strokeIds.size > 0 || eraseSession.shapeIds.size > 0) {
-          sendRef.current({
+          const sent = sendRef.current({
             type: "DELETE_ELEMENTS",
             roomId: roomIdRef.current,
             strokeIds: Array.from(eraseSession.strokeIds),
             shapeIds: Array.from(eraseSession.shapeIds),
           });
+          if (!sent) {
+            for (const [strokeId, stroke] of eraseSession.strokes) {
+              strokesRef.current.set(strokeId, stroke);
+              signaturesRef.current.add(strokeSignature(stroke));
+            }
+            for (const [shapeId, shape] of eraseSession.shapes) {
+              shapesRef.current.set(shapeId, shape);
+              shapeSignaturesRef.current.add(shapeSignature(shape));
+            }
+            syncHasContent();
+            onActionErrorRef.current(
+              "The erase was not saved because the live connection is unavailable. Reconnect and try again.",
+            );
+          }
         }
 
         releasePointer(event.pointerId);
@@ -927,7 +988,14 @@ export function useCanvasEngine({
         requestRender();
       }
     },
-    [commitLocalStroke, commitShape, eventPoint, releasePointer, requestRender],
+    [
+      commitLocalStroke,
+      commitShape,
+      eventPoint,
+      releasePointer,
+      requestRender,
+      syncHasContent,
+    ],
   );
 
   const handlePointerCancel = useCallback(
@@ -940,13 +1008,46 @@ export function useCanvasEngine({
         return;
       }
 
-      if (dragRef.current?.pointerId === event.pointerId) {
+      const drag = dragRef.current;
+      if (drag?.pointerId === event.pointerId) {
         dragRef.current = null;
+        const dx = drag.lastWorld.x - drag.startWorld.x;
+        const dy = drag.lastWorld.y - drag.startWorld.y;
+
+        if (drag.shapeId) {
+          const shape = shapesRef.current.get(drag.shapeId);
+          if (shape) {
+            shapesRef.current.set(
+              drag.shapeId,
+              applyShapeOffset(shape, -dx, -dy),
+            );
+          }
+        }
+        if (drag.strokeId) {
+          const stroke = strokesRef.current.get(drag.strokeId);
+          if (stroke) {
+            strokesRef.current.set(drag.strokeId, {
+              ...stroke,
+              offsetX: stroke.offsetX - dx,
+              offsetY: stroke.offsetY - dy,
+            });
+          }
+        }
         releasePointer(event.pointerId);
       }
 
-      if (eraseSessionRef.current?.pointerId === event.pointerId) {
+      const eraseSession = eraseSessionRef.current;
+      if (eraseSession?.pointerId === event.pointerId) {
         eraseSessionRef.current = null;
+        for (const [strokeId, stroke] of eraseSession.strokes) {
+          strokesRef.current.set(strokeId, stroke);
+          signaturesRef.current.add(strokeSignature(stroke));
+        }
+        for (const [shapeId, shape] of eraseSession.shapes) {
+          shapesRef.current.set(shapeId, shape);
+          shapeSignaturesRef.current.add(shapeSignature(shape));
+        }
+        syncHasContent();
       }
 
       if (localStrokeRef.current) {
@@ -957,7 +1058,7 @@ export function useCanvasEngine({
       releasePointer(event.pointerId);
       requestRender();
     },
-    [commitLocalStroke, releasePointer, requestRender],
+    [commitLocalStroke, releasePointer, requestRender, syncHasContent],
   );
 
   const handleWheel = useCallback(
@@ -1040,24 +1141,36 @@ export function useCanvasEngine({
       const selStroke = selectedStrokeIdRef.current;
 
       if (selShape) {
-        removeShape(selShape);
-        sendRef.current({
+        const sent = sendRef.current({
           type: "DELETE_ELEMENTS",
           roomId: roomIdRef.current,
           strokeIds: [],
           shapeIds: [selShape],
         });
+        if (!sent) {
+          onActionErrorRef.current(
+            "The delete was not saved because the live connection is unavailable. Reconnect and try again.",
+          );
+          return;
+        }
+        removeShape(selShape);
         updateSelection(null, null);
         syncHasContent();
         requestRender();
       } else if (selStroke) {
-        removeStroke(selStroke);
-        sendRef.current({
+        const sent = sendRef.current({
           type: "DELETE_ELEMENTS",
           roomId: roomIdRef.current,
           strokeIds: [selStroke],
           shapeIds: [],
         });
+        if (!sent) {
+          onActionErrorRef.current(
+            "The delete was not saved because the live connection is unavailable. Reconnect and try again.",
+          );
+          return;
+        }
+        removeStroke(selStroke);
         updateSelection(null, null);
         syncHasContent();
         requestRender();
@@ -1188,7 +1301,9 @@ export function useCanvasEngine({
         if (existing) {
           const updated = shapeFromEvent(event);
           if (updated) {
+            shapeSignaturesRef.current.delete(shapeSignature(existing));
             shapesRef.current.set(event.shapeId, updated);
+            shapeSignaturesRef.current.add(shapeSignature(updated));
             requestRender();
           }
         }
