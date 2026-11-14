@@ -122,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [clearAuth]);
 
-  // The backend issues 15-minute access tokens with no refresh endpoint, so we
+  // The backend issues three-day access tokens with no refresh endpoint, so we
   // proactively end the client session when the token expires.
   useEffect(() => {
     if (!token) return;

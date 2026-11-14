@@ -8,7 +8,7 @@ if (!JWT_SECRET) {
   throw new Error("JWT_SECRET is not set in environment variables");
 }
 
-const ACCESS_TOKEN_EXPIRY = "15m";
+const ACCESS_TOKEN_EXPIRY = "3d";
 
 export function signAccessToken(payload: AccessTokenPayload): string {
   return jwt.sign(payload, JWT_SECRET, {
