@@ -6,8 +6,15 @@ import {
   joinRoom,
   leaveRoom,
   broadcastToRoom,
+  getRoomCollaborators,
 } from "./socket-manager";
-import { startStroke, appendStrokePoints, endStroke } from "./stroke-buffer";
+import {
+  startStroke,
+  appendStrokePoints,
+  endStroke,
+  removeActiveStrokes,
+  clearActiveStrokes,
+} from "./stroke-buffer";
 
 function send(ws: WebSocket, message: ServerMessage): void {
   ws.send(JSON.stringify(message));
@@ -15,34 +22,57 @@ function send(ws: WebSocket, message: ServerMessage): void {
 
 export async function handleClientMessage(
   ws: WebSocket,
-  message: ClientMessage
+  message: ClientMessage,
 ): Promise<void> {
   const state = getSocketState(ws);
   if (!state) return;
 
   switch (message.type) {
     case "JOIN_ROOM": {
-      const room = await prisma.room.findUnique({ where: { id: message.roomId } });
+      // One round-trip: remote database latency made a serialised room lookup
+      // plus membership lookup take several seconds before the first join.
+      const room = await prisma.room.findUnique({
+        where: { id: message.roomId },
+        include: {
+          members: {
+            where: { userId: state.userId },
+            select: { userId: true },
+          },
+        },
+      });
+
       if (!room) {
         send(ws, { type: "ERROR", message: "Room not found" });
         return;
       }
 
       const isOwner = room.ownerId === state.userId;
-      const isMember = await prisma.roomMember.findUnique({
-        where: { roomId_userId: { roomId: message.roomId, userId: state.userId } },
-      });
+      const isMember = room.members.length > 0;
 
       if (!isOwner && !isMember) {
-        send(ws, { type: "ERROR", message: "You do not have access to this room" });
+        send(ws, {
+          type: "ERROR",
+          message: "You do not have access to this room",
+        });
         return;
       }
 
       joinRoom(ws, message.roomId);
+      send(ws, {
+        type: "ROOM_JOINED",
+        roomId: message.roomId,
+        userId: state.userId,
+        collaborators: getRoomCollaborators(message.roomId),
+      });
       broadcastToRoom(
         message.roomId,
-        { type: "USER_JOINED", roomId: message.roomId, userId: state.userId, name: state.email },
-        ws
+        {
+          type: "USER_JOINED",
+          roomId: message.roomId,
+          userId: state.userId,
+          name: state.email,
+        },
+        ws,
       );
       break;
     }
@@ -50,7 +80,11 @@ export async function handleClientMessage(
     case "LEAVE_ROOM": {
       const roomId = leaveRoom(ws);
       if (roomId) {
-        broadcastToRoom(roomId, { type: "USER_LEFT", roomId, userId: state.userId });
+        broadcastToRoom(roomId, {
+          type: "USER_LEFT",
+          roomId,
+          userId: state.userId,
+        });
       }
       break;
     }
@@ -61,16 +95,35 @@ export async function handleClientMessage(
         return;
       }
 
-      const shape = await prisma.shape.create({
-        data: {
-          roomId: message.roomId,
-          type: message.shapeType,
-          data: message.data as Prisma.InputJsonValue,
-          color: message.color,
-          strokeWidth: message.strokeWidth,
-          createdById: state.userId,
-        },
+      const existing = await prisma.shape.findUnique({
+        where: { id: message.shapeId },
+        select: { roomId: true },
       });
+
+      if (existing && existing.roomId !== message.roomId) {
+        send(ws, { type: "ERROR", message: "Shape not found in this room" });
+        return;
+      }
+
+      const data = {
+        type: message.shapeType,
+        data: message.data as Prisma.InputJsonValue,
+        color: message.color,
+        strokeWidth: message.strokeWidth,
+        createdById: state.userId,
+      };
+      const shape = existing
+        ? await prisma.shape.update({
+            where: { id: message.shapeId },
+            data,
+          })
+        : await prisma.shape.create({
+            data: {
+              id: message.shapeId,
+              roomId: message.roomId,
+              ...data,
+            },
+          });
 
       broadcastToRoom(message.roomId, {
         type: "SHAPE_CREATED",
@@ -97,7 +150,7 @@ export async function handleClientMessage(
         state.userId,
         message.color,
         message.width,
-        message.startPoint
+        message.startPoint,
       );
 
       broadcastToRoom(message.roomId, {
@@ -125,7 +178,7 @@ export async function handleClientMessage(
           strokeId: message.strokeId,
           points: message.points,
         },
-        ws
+        ws,
       );
       break;
     }
@@ -137,6 +190,7 @@ export async function handleClientMessage(
       if (stroke) {
         await prisma.stroke.create({
           data: {
+            id: message.strokeId,
             roomId: stroke.roomId,
             points: stroke.points,
             color: stroke.color,
@@ -151,6 +205,157 @@ export async function handleClientMessage(
         roomId: message.roomId,
         strokeId: message.strokeId,
       });
+      break;
+    }
+
+    case "DELETE_ELEMENTS": {
+      if (state.roomId !== message.roomId) {
+        send(ws, { type: "ERROR", message: "Not joined to this room" });
+        return;
+      }
+
+      const { strokeIds, shapeIds } = message;
+      if (strokeIds.length === 0 && shapeIds.length === 0) return;
+
+      // Scope every delete to the room so a member cannot remove elements from
+      // another room by guessing ids.
+      await prisma.$transaction([
+        prisma.stroke.deleteMany({
+          where: { roomId: message.roomId, id: { in: strokeIds } },
+        }),
+        prisma.shape.deleteMany({
+          where: { roomId: message.roomId, id: { in: shapeIds } },
+        }),
+      ]);
+
+      removeActiveStrokes(strokeIds);
+
+      broadcastToRoom(message.roomId, {
+        type: "ELEMENTS_DELETED",
+        roomId: message.roomId,
+        strokeIds,
+        shapeIds,
+        deletedById: state.userId,
+      });
+      break;
+    }
+
+    case "CLEAR_CANVAS": {
+      if (state.roomId !== message.roomId) {
+        send(ws, { type: "ERROR", message: "Not joined to this room" });
+        return;
+      }
+
+      const room = await prisma.room.findUnique({
+        where: { id: message.roomId },
+        select: { ownerId: true },
+      });
+
+      if (!room) {
+        send(ws, { type: "ERROR", message: "Room not found" });
+        return;
+      }
+
+      if (room.ownerId !== state.userId) {
+        send(ws, {
+          type: "ERROR",
+          message: "Only the room owner can clear the canvas",
+        });
+        return;
+      }
+
+      await prisma.$transaction([
+        prisma.stroke.deleteMany({ where: { roomId: message.roomId } }),
+        prisma.shape.deleteMany({ where: { roomId: message.roomId } }),
+      ]);
+
+      clearActiveStrokes(message.roomId);
+
+      broadcastToRoom(message.roomId, {
+        type: "CANVAS_CLEARED",
+        roomId: message.roomId,
+        clearedById: state.userId,
+      });
+      break;
+    }
+
+    case "MOVE_ELEMENTS": {
+      if (state.roomId !== message.roomId) {
+        send(ws, { type: "ERROR", message: "Not joined to this room" });
+        return;
+      }
+
+      const { shapeIds, strokeIds, dx, dy } = message;
+      if (shapeIds.length === 0 && strokeIds.length === 0) return;
+
+      const updates: Prisma.PrismaPromise<unknown>[] = [];
+
+      // For shapes: update geometry in the JSON `data` field.
+      // We fetch each shape individually so we can apply the delta.
+      if (shapeIds.length > 0) {
+        const shapes = await prisma.shape.findMany({
+          where: { roomId: message.roomId, id: { in: shapeIds } },
+          select: { id: true, type: true, data: true },
+        });
+
+        for (const shape of shapes) {
+          const data = shape.data as Record<string, number>;
+          let updated: Record<string, number>;
+
+          if (shape.type === "LINE") {
+            updated = {
+              ...data,
+              x1: (data.x1 ?? 0) + dx,
+              y1: (data.y1 ?? 0) + dy,
+              x2: (data.x2 ?? 0) + dx,
+              y2: (data.y2 ?? 0) + dy,
+            };
+          } else {
+            // RECTANGLE, ELLIPSE, TEXT
+            updated = {
+              ...data,
+              x: (data.x ?? 0) + dx,
+              y: (data.y ?? 0) + dy,
+            };
+          }
+
+          updates.push(
+            prisma.shape.update({
+              where: { id: shape.id },
+              data: { data: updated as Prisma.InputJsonValue },
+            })
+          );
+        }
+      }
+
+      // For strokes: accumulate the offset columns.
+      if (strokeIds.length > 0) {
+        updates.push(
+          prisma.stroke.updateMany({
+            where: { roomId: message.roomId, id: { in: strokeIds } },
+            data: {
+              offsetX: { increment: dx },
+              offsetY: { increment: dy },
+            },
+          })
+        );
+      }
+
+      await prisma.$transaction(updates);
+
+      broadcastToRoom(
+        message.roomId,
+        {
+          type: "ELEMENTS_MOVED",
+          roomId: message.roomId,
+          shapeIds,
+          strokeIds,
+          dx,
+          dy,
+          movedById: state.userId,
+        },
+        ws,
+      );
       break;
     }
   }

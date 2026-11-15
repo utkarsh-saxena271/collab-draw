@@ -57,3 +57,18 @@ export async function login(req: Request, res: Response) {
     token,
   });
 }
+
+// Validates the bearer token and returns the current user. Used by the frontend
+// to restore a session on page reload instead of trusting localStorage.
+export async function me(req: Request, res: Response) {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.userId },
+    select: { id: true, email: true, name: true, createdAt: true },
+  });
+
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  return res.status(200).json({ user });
+}

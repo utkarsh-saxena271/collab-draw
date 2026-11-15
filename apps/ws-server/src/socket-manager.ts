@@ -56,6 +56,27 @@ export function removeSocket(ws: WebSocket): string | null {
   return roomId;
 }
 
+// Snapshot of the people currently connected to a room, deduplicated by user.
+// Names are emails because that is the only display identity the socket holds.
+export function getRoomCollaborators(
+  roomId: string
+): Array<{ userId: string; name: string }> {
+  const sockets = roomSockets.get(roomId);
+  if (!sockets) return [];
+
+  const seen = new Set<string>();
+  const collaborators: Array<{ userId: string; name: string }> = [];
+
+  for (const socket of sockets) {
+    const state = socketState.get(socket);
+    if (!state || seen.has(state.userId)) continue;
+    seen.add(state.userId);
+    collaborators.push({ userId: state.userId, name: state.email });
+  }
+
+  return collaborators;
+}
+
 export function broadcastToRoom(roomId: string, message: unknown, exclude?: WebSocket): void {
   const sockets = roomSockets.get(roomId);
   if (!sockets) return;
